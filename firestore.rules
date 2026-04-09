@@ -1,0 +1,97 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    function projectTeamIds() {
+      return resource.data.get('teamMemberIds', []);
+    }
+
+    function isProjectOwner() {
+      return signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    function isProjectTeamMember() {
+      return signedIn() && projectTeamIds().hasAny([request.auth.uid]);
+    }
+
+    function projectImmutableFieldsMatch() {
+      return request.resource.data.userId == resource.data.userId
+        && request.resource.data.get('teamMemberIds', [])
+          == resource.data.get('teamMemberIds', [])
+        && request.resource.data.name == resource.data.name
+        && request.resource.data.description == resource.data.description
+        && request.resource.data.goal == resource.data.goal
+        && request.resource.data.targetSeconds == resource.data.targetSeconds
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.get('memberNicknames', {})
+          == resource.data.get('memberNicknames', {});
+    }
+
+    function projectCoreExceptTeamUnchanged() {
+      return request.resource.data.userId == resource.data.userId
+        && request.resource.data.name == resource.data.name
+        && request.resource.data.description == resource.data.description
+        && request.resource.data.goal == resource.data.goal
+        && request.resource.data.targetSeconds == resource.data.targetSeconds
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.totalTime == resource.data.totalTime
+        && request.resource.data.get('timeByMember', {})
+          == resource.data.get('timeByMember', {});
+    }
+
+    function teamMemberLeavesSelf() {
+      let uid = request.auth.uid;
+      let beforeTeam = resource.data.get('teamMemberIds', []);
+      let afterTeam = request.resource.data.get('teamMemberIds', []);
+      let nickDiff = resource.data.get('memberNicknames', {})
+        .diff(request.resource.data.get('memberNicknames', {}));
+      return signedIn()
+        && resource.data.userId != uid
+        && beforeTeam.hasAny([uid])
+        && !afterTeam.hasAny([uid])
+        && afterTeam.size() + 1 == beforeTeam.size()
+        && beforeTeam.hasAll(afterTeam)
+        && projectCoreExceptTeamUnchanged()
+        && nickDiff.removedKeys().hasOnly([uid])
+        && nickDiff.addedKeys().size() == 0
+        && nickDiff.changedKeys().size() == 0;
+    }
+
+    match /users/{userId} {
+      allow read, write: if isOwner(userId);
+    }
+
+    match /userHandles/{handleKey} {
+      allow read: if signedIn();
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['userId'])
+        && request.resource.data.userId == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == request.auth.uid;
+      allow delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    match /projects/{projectId} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read: if signedIn() && (isProjectOwner() || isProjectTeamMember());
+      allow delete: if signedIn() && isProjectOwner();
+      allow update: if signedIn()
+        && (isProjectOwner()
+          || (isProjectTeamMember() && projectImmutableFieldsMatch())
+          || teamMemberLeavesSelf());
+    }
+
+    match /sessions/{sessionId} {
+      allow create: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow read, update, delete: if signedIn() && resource.data.userId == request.auth.uid;
+    }
+  }
+}

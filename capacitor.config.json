@@ -1,0 +1,6 @@
+{
+  "appId": "com.flowjar.app",
+  "appName": "FlowJar",
+  "webDir": "dist",
+  "bundledWebRuntime": false
+}
